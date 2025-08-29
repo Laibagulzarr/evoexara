@@ -1,37 +1,37 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "/vite.svg";
-import "./index.css"; // make sure Tailwind is applied
+import { useEffect, useState } from "react";
 
 function App() {
-  const [count, setCount] = useState(0);
+  const [spots, setSpots] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/map")   // call backend
+      .then((res) => res.json())
+      .then((data) => {
+        setSpots(data.spots || []);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Error fetching spots:", err);
+        setLoading(false);
+      });
+  }, []);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
-      <div className="flex gap-8 mb-8">
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="w-24 h-24" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="w-24 h-24" alt="React logo" />
-        </a>
-      </div>
+    <div className="p-6 text-center">
+      <h1 className="text-2xl font-bold mb-4">Trending Spots</h1>
 
-      <h1 className="text-5xl font-bold text-blue-400 mb-6">
-        🚀 Vite + React + Tailwind
-      </h1>
-
-      <div className="bg-gray-800 p-6 rounded-lg shadow-lg text-center">
-        <button
-          onClick={() => setCount((count) => count + 1)}
-          className="px-6 py-2 rounded bg-blue-500 hover:bg-blue-600 transition"
-        >
-          count is {count}
-        </button>
-        <p className="mt-4 text-gray-300">
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
+      {loading ? (
+        <p>Loading...</p>
+      ) : (
+        <ul className="space-y-2">
+          {spots.map((spot, idx) => (
+            <li key={idx} className="p-2 bg-gray-100 rounded shadow">
+              {spot}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
