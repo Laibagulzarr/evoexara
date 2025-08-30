@@ -4,14 +4,13 @@ import {
   View,
   Text,
   Pressable,
+  TouchableOpacity,
   StyleSheet,
   useWindowDimensions,
   Animated,
   Easing,
   StatusBar,
-  TouchableOpacity,
   ScrollView,
-  Platform,
 } from "react-native";
 
 /* ================= THEME ================= */
@@ -28,30 +27,24 @@ const c = {
   chipBgActive: "rgba(168,85,247,0.22)",
 };
 
-/* ================= SMALL BLOCKS ================= */
-function GlowText({
+/* ================ SHARED UI ================ */
+function Glow({
   children,
   size = 18,
-  weight = "700",
-  center,
-  color = c.text,
-  glow = c.neon,
+  center = true,
 }: {
   children: React.ReactNode;
   size?: number;
-  weight?: "400" | "500" | "600" | "700" | "800";
   center?: boolean;
-  color?: string;
-  glow?: string;
 }) {
   return (
     <Text
       style={{
-        color,
+        color: c.text,
         fontSize: size,
-        fontWeight: weight,
+        fontWeight: "700",
         textAlign: center ? "center" : "left",
-        textShadowColor: glow,
+        textShadowColor: c.neon,
         textShadowRadius: 10,
         textShadowOffset: { width: 0, height: 0 },
       }}
@@ -64,12 +57,14 @@ function GlowText({
 function NeonDivider() {
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(a, { toValue: 1, duration: 1500, useNativeDriver: false }),
         Animated.timing(a, { toValue: 0, duration: 1500, useNativeDriver: false }),
       ])
-    ).start();
+    );
+    loop.start();
+    return () => loop.stop();
   }, [a]);
   const width = a.interpolate({ inputRange: [0, 1], outputRange: ["18%", "58%"] });
   return (
@@ -77,11 +72,11 @@ function NeonDivider() {
       <Animated.View
         style={{
           width: width as unknown as number,
-          height: 2,
+          height: 3,
           backgroundColor: c.neon,
           shadowColor: c.neon,
-          shadowOpacity: 0.9,
-          shadowRadius: 8,
+          shadowOpacity: 0.95,
+          shadowRadius: 10,
           borderRadius: 2,
         }}
       />
@@ -89,214 +84,232 @@ function NeonDivider() {
   );
 }
 
-/* ================= RADIAL WHEEL =================
-   Reusable wheel that places circular buttons around a ring.
-   Supports single-select or multi-select (friends).
-==================================================*/
+/* ================ RADIAL WHEEL ================ */
 type WheelItem = { id: string; label: string; emoji?: string };
 
-function RadialWheel({
+function Wheel({
   title,
-  hint,
   items,
   multi = false,
-  initialSelected = [],
-  onConfirm,
+  initial = [],
+  onPick,
+  keySeed, // change to remount/re-animate
 }: {
   title: string;
-  hint?: string;
   items: WheelItem[];
   multi?: boolean;
-  initialSelected?: string[];
-  onConfirm: (selectedIds: string[]) => void;
+  initial?: string[];
+  onPick: (ids: string[]) => void;
+  keySeed: string;
 }) {
   const { width } = useWindowDimensions();
-  const size = Math.min(width - 32, 360); // outer diameter
+  const size = Math.min(width - 32, 360);
   const center = size / 2;
-  const innerPad = 18;
-  const radius = (size - innerPad) / 2 - 24; // where buttons sit
+  const pad = 18;
+  const radius = (size - pad) / 2 - 24;
 
-  const [selected, setSelected] = useState<string[]>(initialSelected);
+  const [selected, setSelected] = useState<string[]>(initial);
 
-  // pulsing center
+  // appear/disappear
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    progress.setValue(0);
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [keySeed]);
+
+  const appear = {
+    transform: [
+      {
+        scale: progress.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.7, 1],
+        }),
+      },
+    ],
+    opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }),
+  };
+
+  const animateOutThen = (cb: () => void) => {
+    Animated.timing(progress, {
+      toValue: 0,
+      duration: 260,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => finished && cb());
+  };
+
+  // center pulse
   const pulse = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 1, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
         Animated.timing(pulse, { toValue: 0, duration: 1600, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
       ])
-    ).start();
+    );
+    loop.start();
+    return () => loop.stop();
   }, [pulse]);
   const centerScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.04] });
 
-  // where each button sits
   const positions = useMemo(() => {
     const N = items.length;
     return items.map((it, i) => {
-      const angle = -Math.PI / 2 + (i * 2 * Math.PI) / N; // start top, clockwise
-      const x = center + radius * Math.cos(angle);
-      const y = center + radius * Math.sin(angle);
-      return { it, x, y };
+      const angle = -Math.PI / 2 + (i * 2 * Math.PI) / N;
+      return {
+        it,
+        x: center + radius * Math.cos(angle),
+        y: center + radius * Math.sin(angle),
+        i,
+      };
     });
   }, [items, center, radius]);
 
-  const toggle = (id: string) => {
-    if (multi) {
-      setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
-    } else {
-      setSelected([id]);
+  const handleTap = (id: string) => {
+    if (!multi) {
+      animateOutThen(() => onPick([id]));
+      return;
     }
+    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   };
 
   return (
-    <View style={{ alignItems: "center" }}>
-      <GlowText size={20} center>
-        {title}
-      </GlowText>
-      {!!hint && <Text style={{ color: c.sub, textAlign: "center", marginTop: 6 }}>{hint}</Text>}
-      <NeonDivider />
-
+    <View
+      style={{
+        alignSelf: "center",
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: c.ring,
+        borderWidth: 1,
+        borderColor: c.neon,
+        shadowColor: c.neonDeep,
+        shadowOpacity: 0.35,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 0 },
+        marginTop: 16,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {/* inner ring */}
       <View
-        style={[
-          styles.wheel,
-          {
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-            backgroundColor: c.ring,
-            borderWidth: 1,
-            borderColor: c.neon,
-            shadowColor: c.neonDeep,
-            shadowOpacity: 0.35,
-            shadowRadius: 16,
-            shadowOffset: { width: 0, height: 0 },
-            marginTop: 16,
-          },
-        ]}
-      >
-        {/* decorative inner ring */}
-        <View
-          style={{
-            position: "absolute",
-            left: innerPad,
-            top: innerPad,
-            right: innerPad,
-            bottom: innerPad,
-            borderRadius: (size - 2 * innerPad) / 2,
-            borderWidth: 1,
-            borderColor: c.border,
-          }}
-        />
+        style={{
+          position: "absolute",
+          left: pad,
+          top: pad,
+          right: pad,
+          bottom: pad,
+          borderRadius: (size - 2 * pad) / 2,
+          borderWidth: 1,
+          borderColor: c.border,
+        }}
+      />
 
-        {/* center capsule */}
-        <Animated.View
-          style={{
-            position: "absolute",
-            left: center - 70,
-            top: center - 70,
-            width: 140,
-            height: 140,
-            borderRadius: 70,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "rgba(168,85,247,0.08)",
-            borderWidth: 1,
-            borderColor: c.neon,
-            transform: [{ scale: centerScale }],
-            shadowColor: c.neon,
-            shadowOpacity: 0.9,
-            shadowRadius: 16,
-            shadowOffset: { width: 0, height: 0 },
-            paddingHorizontal: 8,
-          }}
-        >
-          <GlowText size={18} center glow={c.neonDeep}>
-            {title}
-          </GlowText>
-          {!!hint && (
-            <Text style={{ color: c.sub, fontSize: 12, textAlign: "center", marginTop: 6 }}>
-              {multi ? "Select multiple" : hint}
-            </Text>
-          )}
-          {/* confirm button */}
+      {/* center title (and confirm for multi) */}
+      <Animated.View
+        style={{
+          position: "absolute",
+          left: center - 70,
+          top: center - 70,
+          width: 140,
+          height: 140,
+          borderRadius: 70,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "rgba(168,85,247,0.08)",
+          borderWidth: 1,
+          borderColor: c.neon,
+          transform: [{ scale: centerScale }],
+          shadowColor: c.neon,
+          shadowOpacity: 0.9,
+          shadowRadius: 16,
+          shadowOffset: { width: 0, height: 0 },
+          paddingHorizontal: 8,
+        }}
+      >
+        <Glow size={18}>{title}</Glow>
+        {multi && (
           <TouchableOpacity
             activeOpacity={0.9}
-            onPress={() => onConfirm(selected)}
-            style={[
-              styles.primaryBtn,
-              { marginTop: 10, opacity: selected.length ? 1 : 0.4 },
-            ]}
+            onPress={() =>
+              animateOutThen(() => onPick(selected.includes("none") ? [] : selected.filter((x) => x !== "none")))
+            }
+            style={[styles.primaryBtn, { marginTop: 10, opacity: selected.length ? 1 : 0.4 }]}
             disabled={!selected.length}
           >
-            <Text style={{ color: "#0B0010", fontWeight: "700" }}>
-              {multi ? "Confirm" : "Next"}
-            </Text>
+            <Text style={{ color: "#0B0010", fontWeight: "700" }}>Confirm</Text>
           </TouchableOpacity>
-        </Animated.View>
+        )}
+      </Animated.View>
 
-        {/* buttons around circle */}
-        {positions.map(({ it, x, y }, idx) => {
-          const S = 64;
-          const anim = useRef(new Animated.Value(0)).current;
-          const onIn = () =>
-            Animated.timing(anim, { toValue: 1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
-          const onOut = () =>
-            Animated.timing(anim, { toValue: 0, duration: 120, easing: Easing.in(Easing.quad), useNativeDriver: true }).start();
-          const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+      {/* option buttons */}
+      {positions.map(({ it, x, y, i }) => {
+        const S = 64;
+        const hover = useRef(new Animated.Value(0)).current;
+        const onIn = () =>
+          Animated.timing(hover, { toValue: 1, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+        const onOut = () =>
+          Animated.timing(hover, { toValue: 0, duration: 120, easing: Easing.in(Easing.quad), useNativeDriver: true }).start();
+        const scale = hover.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
 
-          const active = selected.includes(it.id);
+        const active = multi ? selected.includes(it.id) : false;
 
-          return (
-            <Animated.View
-              key={it.id}
-              style={{
+        return (
+          <Animated.View
+            key={it.id}
+            style={[
+              {
                 position: "absolute",
                 left: x - S / 2,
                 top: y - S / 2,
                 width: S,
                 height: S,
                 transform: [{ scale }],
-              }}
+              },
+              appear,
+            ]}
+          >
+            <Pressable
+              onPress={() => handleTap(it.id)}
+              onPressIn={onIn}
+              onPressOut={onOut}
+              style={({ pressed }) => [
+                styles.slotBtn,
+                {
+                  borderColor: active ? c.cyan : c.neon,
+                  backgroundColor: pressed || active ? c.chipBgActive : c.chipBg,
+                },
+              ]}
             >
-              <Pressable
-                onPress={() => toggle(it.id)}
-                onPressIn={onIn}
-                onPressOut={onOut}
-                style={({ pressed }) => [
-                  styles.slotBtn,
-                  {
-                    borderColor: active ? c.cyan : c.neon,
-                    backgroundColor: pressed || active ? c.chipBgActive : c.chipBg,
-                  },
-                ]}
-              >
-                {!!it.emoji && <Text style={{ fontSize: 26 }}>{it.emoji}</Text>}
-                {!it.emoji && (
-                  <GlowText size={14} center>
-                    {it.label}
-                  </GlowText>
-                )}
-              </Pressable>
-              <Text style={{ color: active ? c.cyan : c.sub, fontSize: 11, textAlign: "center", marginTop: 6 }}>
-                {it.label}
-              </Text>
-            </Animated.View>
-          );
-        })}
-      </View>
+              {it.emoji ? (
+                <Text style={{ fontSize: 26 }}>{it.emoji}</Text>
+              ) : (
+                <Text style={{ color: c.text, fontWeight: "700", fontSize: 13 }}>{it.label}</Text>
+              )}
+            </Pressable>
+            <Text style={{ color: active ? c.cyan : c.text, fontSize: 11, textAlign: "center", marginTop: 6 }}>
+              {it.label}
+            </Text>
+          </Animated.View>
+        );
+      })}
     </View>
   );
 }
 
-/* ================= FLOW (STATE MACHINE) ================= */
-type Step = "category" | "friends" | "budget" | "results";
+/* ================ FLOW DATA ================ */
+type Step = "category" | "setup" | "friends" | "budget" | "results";
 
-const CATEGORY_ITEMS: WheelItem[] = [
+const CATEGORY: WheelItem[] = [
   { id: "food", label: "Food", emoji: "🍔" },
   { id: "adventure", label: "Adventure", emoji: "🧭" },
   { id: "chill", label: "Chill", emoji: "🧋" },
-  { id: "study", label: "Study", emoji: "📚" },
 ];
 
 const FRIENDS: WheelItem[] = [
@@ -311,163 +324,132 @@ const FRIENDS: WheelItem[] = [
 ];
 
 const BUDGET: WheelItem[] = [
-  { id: "$", label: "Budget", emoji: "💵" },
-  { id: "$$", label: "Mid", emoji: "💳" },
-  { id: "$$$", label: "Premium", emoji: "💎" },
+  { id: "$", label: "$", emoji: "💵" },
+  { id: "$$", label: "$$", emoji: "💳" },
+  { id: "$$$", label: "$$$", emoji: "💎" },
   { id: "free", label: "Free", emoji: "🆓" },
 ];
 
-export default function EvoPlanner() {
-  const [step, setStep] = useState<Step>("category");
-  const [category, setCategory] = useState<string | null>(null);
-  const [friends, setFriends] = useState<string[]>([]);
-  const [budget, setBudget] = useState<string | null>(null);
-
-  const nextFromCategory = (ids: string[]) => {
-    setCategory(ids[0] ?? null);
-    setStep("friends");
+/* ================ SETUP SCREEN (two circles) ================ */
+function SetupCircles({
+  friendsSet,
+  budgetSet,
+  onOpenFriends,
+  onOpenBudget,
+  onShowResults,
+}: {
+  friendsSet: boolean;
+  budgetSet: boolean;
+  onOpenFriends: () => void;
+  onOpenBudget: () => void;
+  onShowResults: () => void;
+}) {
+  const a = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    a.setValue(0);
+    Animated.timing(a, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, []);
+  const appear = {
+    transform: [
+      { translateY: a.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) },
+      { scale: a.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+    ],
+    opacity: a,
   };
 
-  const nextFromFriends = (ids: string[]) => {
-    // If "None" picked, ignore other selections and use empty list
-    const chosen = ids.includes("none") ? [] : ids.filter((x) => x !== "none");
-    setFriends(chosen);
-    setStep("budget");
+  const Circle = ({
+    title,
+    set,
+    onPress,
+    emoji,
+  }: {
+    title: string;
+    set: boolean;
+    onPress: () => void;
+    emoji: string;
+  }) => {
+    const pulse = useRef(new Animated.Value(0)).current;
+    useEffect(() => {
+      const loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, { toValue: 1, duration: 1500, useNativeDriver: true }),
+          Animated.timing(pulse, { toValue: 0, duration: 1500, useNativeDriver: true }),
+        ])
+      );
+      loop.start();
+      return () => loop.stop();
+    }, [pulse]);
+    const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, set ? 1 : 1.04] });
+
+    return (
+      <Animated.View style={[styles.setupCircleWrap, appear, { transform: [{ scale }] }]}>
+        <Pressable
+          onPress={onPress}
+          style={({ pressed }) => [
+            styles.setupCircle,
+            {
+              borderColor: set ? c.cyan : c.neon,
+              backgroundColor: pressed ? c.chipBgActive : c.chipBg,
+            },
+          ]}
+        >
+          <Text style={{ fontSize: 26 }}>{emoji}</Text>
+          <Glow size={16}>{title}</Glow>
+          <Text style={{ color: set ? c.cyan : c.sub, marginTop: 4 }}>{set ? "Set ✓" : "Not set"}</Text>
+        </Pressable>
+      </Animated.View>
+    );
   };
 
-  const nextFromBudget = (ids: string[]) => {
-    setBudget(ids[0] ?? null);
-    setStep("results");
-  };
-
-  const reset = () => {
-    setStep("category");
-    setCategory(null);
-    setFriends([]);
-    setBudget(null);
-  };
-
-  // mock recommendation engine
-  const results = useMemo(() => {
-    if (!category || !budget) return [];
-    const friendCount = friends.length;
-    const seed = `${category}-${budget}-${friendCount}`;
-    // pretend we pick based on category/budget
-    const pool: Record<string, string[]> = {
-      food: ["Neon Burger Bar", "Purple Sushi Lab", "Midnight Shawarma", "Glow Noodles"],
-      adventure: ["VR Arena", "Desert Dune Buggies", "Climb+Wall", "Laser Tag Dome"],
-      chill: ["Retro Arcade Lounge", "Seaside Walkway", "Board Game Café", "Night Market"],
-      study: ["Quiet Library Pods", "Focus Café", "Study Hub 24/7", "Rooftop Reading"],
-    };
-    const priceTag: Record<string, string> = { "$": "$", "$$": "$$", "$$$": "$$$", free: "FREE" };
-    const picks = pool[category].map((name, i) => ({
-      id: `${seed}-${i}`,
-      name,
-      price: priceTag[budget!],
-      vibe:
-        category === "food"
-          ? ["Burgers", "Sushi", "Arab", "Asian"][i % 4]
-          : category === "adventure"
-          ? ["VR", "Outdoor", "Climb", "Laser"][i % 4]
-          : category === "chill"
-          ? ["Arcade", "Walk", "Games", "Market"][i % 4]
-          : ["Pods", "Café", "Hub", "Rooftop"][i % 4],
-    }));
-    return picks.slice(0, 6);
-  }, [category, budget, friends.length]);
+  const ready = friendsSet && budgetSet;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
-      <StatusBar barStyle="light-content" />
-      <View style={{ paddingTop: 8 }}>
-        <GlowText size={20} center>Evo • Planner</GlowText>
-        <NeonDivider />
-        <Text style={{ color: c.sub, textAlign: "center", marginTop: 8 }}>
-          {step === "category" && "Choose a vibe to plan"}
-          {step === "friends" && "Select friends (or None). Confirm in the center."}
-          {step === "budget" && "Pick a budget tier"}
-          {step === "results" && "Here are places based on your picks"}
-        </Text>
+    <View style={{ paddingHorizontal: 24, alignItems: "center" }}>
+      <Glow size={18}>Setup</Glow>
+      <Text style={{ color: c.sub, marginTop: 6 }}>Choose who’s coming & your budget</Text>
+      <NeonDivider />
+
+      <View style={styles.setupRow}>
+        <Circle title="Friends" set={friendsSet} onPress={onOpenFriends} emoji="👥" />
+        <Circle title="Budget" set={budgetSet} onPress={onOpenBudget} emoji="💸" />
       </View>
 
-      <View style={{ flex: 1, justifyContent: "center" }}>
-        {step === "category" && (
-          <RadialWheel
-            title="Plan"
-            hint="Food • Adventure • Chill • Study"
-            items={CATEGORY_ITEMS}
-            onConfirm={nextFromCategory}
-          />
-        )}
-
-        {step === "friends" && (
-          <RadialWheel
-            title="Friends"
-            hint="Select who’s coming"
-            items={FRIENDS}
-            multi
-            onConfirm={nextFromFriends}
-          />
-        )}
-
-        {step === "budget" && (
-          <RadialWheel
-            title="Budget"
-            hint="Pick a price range"
-            items={BUDGET}
-            onConfirm={nextFromBudget}
-          />
-        )}
-
-        {step === "results" && (
-          <ResultsPanel
-            category={category!}
-            friends={friends}
-            budget={budget!}
-            data={results}
-            onBackBudget={() => setStep("budget")}
-            onReset={reset}
-          />
-        )}
-      </View>
-    </SafeAreaView>
+      <TouchableOpacity
+        activeOpacity={0.9}
+        onPress={onShowResults}
+        style={[styles.primaryBtn, { marginTop: 18, opacity: ready ? 1 : 0.35 }]}
+        disabled={!ready}
+      >
+        <Text style={{ color: "#0B0010", fontWeight: "700" }}>Show results</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
-/* ================ RESULTS LIST ================ */
-function ResultsPanel({
-  category,
-  friends,
-  budget,
-  data,
-  onBackBudget,
-  onReset,
+/* ================ RESULTS ================ */
+function Results({
+  list,
+  friendsCount,
+  onBackToSetup,
+  onResetAll,
 }: {
-  category: string;
-  friends: string[];
-  budget: string;
-  data: { id: string; name: string; price: string; vibe: string }[];
-  onBackBudget: () => void;
-  onReset: () => void;
+  list: { id: string; name: string; price: string }[];
+  friendsCount: number;
+  onBackToSetup: () => void;
+  onResetAll: () => void;
 }) {
   return (
-    <View style={{ flex: 1, paddingHorizontal: 16, paddingTop: 10 }}>
-      <View style={{ flexDirection: "row", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-        <Badge label={`Vibe: ${cap(category)}`} />
-        <Badge label={`Budget: ${budget.toUpperCase()}`} />
-        <Badge label={`Friends: ${friends.length || "None"}`} />
-      </View>
-
+    <View style={{ flex: 1, paddingHorizontal: 16 }}>
       <ScrollView
-        style={{ marginTop: 14 }}
+        style={{ marginTop: 8 }}
         contentContainerStyle={{ paddingBottom: 20 }}
         showsVerticalScrollIndicator={false}
       >
-        {data.map((row) => (
+        {list.map((row) => (
           <View key={row.id} style={styles.card}>
-            <GlowText size={16}>{row.name}</GlowText>
-            <Text style={{ color: c.sub, marginTop: 4 }}>
-              {row.vibe} • {row.price}
+            <Glow size={16}>{row.name}</Glow>
+            <Text style={{ color: c.text, opacity: 0.85, marginTop: 4 }}>
+              {row.price} • {friendsCount ? `${friendsCount} friend(s)` : "Solo"}
             </Text>
             <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
               <SmallBtn label="Map" />
@@ -479,30 +461,13 @@ function ResultsPanel({
       </ScrollView>
 
       <View style={{ flexDirection: "row", justifyContent: "center", gap: 12, marginBottom: 12 }}>
-        <TouchableOpacity onPress={onBackBudget} activeOpacity={0.9} style={styles.secondaryBtn}>
-          <Text style={{ color: c.text }}>Back</Text>
+        <TouchableOpacity onPress={onBackToSetup} activeOpacity={0.9} style={styles.secondaryBtn}>
+          <Text style={{ color: c.text }}>Back to setup</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={onReset} activeOpacity={0.9} style={styles.primaryBtn}>
-          <Text style={{ color: "#0B0010", fontWeight: "700" }}>Start Over</Text>
+        <TouchableOpacity onPress={onResetAll} activeOpacity={0.9} style={styles.primaryBtn}>
+          <Text style={{ color: "#0B0010", fontWeight: "700" }}>Start over</Text>
         </TouchableOpacity>
       </View>
-    </View>
-  );
-}
-
-function Badge({ label }: { label: string }) {
-  return (
-    <View
-      style={{
-        backgroundColor: c.chipBg,
-        borderColor: c.neon,
-        borderWidth: 1,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-      }}
-    >
-      <Text style={{ color: c.text, fontSize: 12 }}>{label}</Text>
     </View>
   );
 }
@@ -525,16 +490,103 @@ function SmallBtn({ label }: { label: string }) {
   );
 }
 
-function cap(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+/* ================ MAIN ================ */
+export default function EvoPlanner() {
+  const [step, setStep] = useState<Step>("category");
+  const [category, setCategory] = useState<string | null>(null);
+  const [friends, setFriends] = useState<string[]>([]);
+  const [budget, setBudget] = useState<string | null>(null);
+
+  // explicit completion flags (so "Not set" is correct initially)
+  const [friendsLocked, setFriendsLocked] = useState(false);
+  const [budgetLocked, setBudgetLocked] = useState(false);
+
+  const seed = (s: Step) => `wheel-${s}`;
+
+  const pickCategory = (ids: string[]) => {
+    setCategory(ids[0] ?? null);
+    setStep("setup");
+  };
+
+  const pickFriends = (ids: string[]) => {
+    setFriends(ids.includes("none") ? [] : ids.filter((x) => x !== "none"));
+    setFriendsLocked(true);
+    setStep("setup");
+  };
+
+  const pickBudget = (ids: string[]) => {
+    setBudget(ids[0] ?? null);
+    setBudgetLocked(true);
+    setStep("setup");
+  };
+
+  const places = useMemo(() => {
+    if (!category || !budget) return [];
+    const pool: Record<string, string[]> = {
+      food: ["Neon Burger Bar", "Purple Sushi Lab", "Midnight Shawarma", "Glow Noodles"],
+      adventure: ["VR Arena", "Desert Dune Buggies", "Climb+Wall", "Laser Tag Dome"],
+      chill: ["Retro Arcade Lounge", "Seaside Walkway", "Board Game Café", "Night Market"],
+    };
+    const price = budget === "free" ? "FREE" : budget;
+    return pool[category].map((name, i) => ({ id: `${category}-${budget}-${i}`, name, price }));
+  }, [category, budget]);
+
+  const resetAll = () => {
+    setStep("category");
+    setCategory(null);
+    setFriends([]);
+    setBudget(null);
+    setFriendsLocked(false);
+    setBudgetLocked(false);
+  };
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
+      <StatusBar barStyle="light-content" />
+      {/* Header */}
+      <View style={{ paddingTop: 8 }}>
+        <Glow size={20}>Evo • Planner</Glow>
+        <NeonDivider />
+      </View>
+
+      <View style={{ flex: 1, justifyContent: "center" }}>
+        {step === "category" && (
+          <Wheel title="Ask AI" items={CATEGORY} onPick={pickCategory} keySeed={seed("category")} />
+        )}
+
+        {step === "setup" && (
+          <SetupCircles
+            friendsSet={friendsLocked}
+            budgetSet={budgetLocked}
+            onOpenFriends={() => setStep("friends")}
+            onOpenBudget={() => setStep("budget")}
+            onShowResults={() => setStep("results")}
+          />
+        )}
+
+        {step === "friends" && (
+          <Wheel title="Friends" items={FRIENDS} multi onPick={pickFriends} keySeed={seed("friends")} />
+        )}
+
+        {step === "budget" && (
+          <Wheel title="Budget" items={BUDGET} onPick={pickBudget} keySeed={seed("budget")} />
+        )}
+
+        {step === "results" && (
+          <Results
+            list={places}
+            friendsCount={friends.length}
+            onBackToSetup={() => setStep("setup")}
+            onResetAll={resetAll}
+          />
+        )}
+      </View>
+    </SafeAreaView>
+  );
 }
 
-/* ================= STYLES ================= */
+/* ================ STYLES ================ */
 const styles = StyleSheet.create({
-  wheel: {
-    alignItems: "center",
-    justifyContent: "center",
-  },
   slotBtn: {
     flex: 1,
     borderWidth: 1,
@@ -577,5 +629,33 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 0 },
+  },
+  /* Setup screen circles */
+  setupRow: {
+    marginTop: 18,
+    flexDirection: "row",
+    gap: 16,
+    justifyContent: "center",
+    flexWrap: "wrap",
+  },
+  setupCircleWrap: {
+    width: 160,
+    height: 160,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  setupCircle: {
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    backgroundColor: c.chipBg,
+    shadowColor: c.neon,
+    shadowOpacity: 0.9,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 0 },
+    gap: 6,
   },
 });
